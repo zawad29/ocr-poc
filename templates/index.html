@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NID Card OCR Comparison</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Bangladesh NID Card OCR Comparison</h1>
+        <p class="subtitle">Compare Tesseract, EasyOCR, and docTR on National ID cards</p>
+
+        <form action="/" method="post" enctype="multipart/form-data" class="upload-form">
+            <label for="image" class="file-label">
+                <span>Choose NID Card Image</span>
+                <input type="file" name="image" id="image" accept="image/*" required>
+            </label>
+            <button type="submit">Process</button>
+        </form>
+
+        {% if original_image %}
+        <div class="images-section">
+            <div class="image-card">
+                <h3>Original Image</h3>
+                <img src="{{ original_image }}" alt="Original NID Card">
+            </div>
+            {% if preprocessed_image %}
+            <div class="image-card">
+                <h3>Preprocessed Image</h3>
+                <img src="{{ preprocessed_image }}" alt="Preprocessed NID Card">
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        {% if results %}
+        <div class="results-grid">
+            {% for r in results %}
+            <div class="result-card">
+                <h2>{{ r.engine }}</h2>
+                <span class="time-badge">{{ r.time }}</span>
+
+                <h3>Raw OCR Output</h3>
+                <pre class="raw-text">{{ r.raw_text }}</pre>
+
+                <h3>Parsed Fields</h3>
+                <table>
+                    <tr>
+                        <th>Field</th>
+                        <th>Value</th>
+                    </tr>
+                    <tr>
+                        <td>Name (Bengali)</td>
+                        <td>{{ r.parsed.name_bn or '---' }}</td>
+                    </tr>
+                    <tr>
+                        <td>Name (English)</td>
+                        <td>{{ r.parsed.name_en or '---' }}</td>
+                    </tr>
+                    <tr>
+                        <td>Father</td>
+                        <td>{{ r.parsed.father or '---' }}</td>
+                    </tr>
+                    <tr>
+                        <td>Mother</td>
+                        <td>{{ r.parsed.mother or '---' }}</td>
+                    </tr>
+                    <tr>
+                        <td>Date of Birth</td>
+                        <td>{{ r.parsed.dob or '---' }}</td>
+                    </tr>
+                    <tr>
+                        <td>NID Number</td>
+                        <td>{{ r.parsed.nid_number or '---' }}</td>
+                    </tr>
+                </table>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>
