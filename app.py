@@ -42,10 +42,11 @@ async def process(request: Request, image: UploadFile = File(...)):
     except Exception as e:
         preprocessed_filename = None
 
-    # Run OCR engines
-    tesseract_text, tesseract_time = run_tesseract(preprocessed_path if preprocessed_filename else original_path)
-    easyocr_text, easyocr_time = run_easyocr(preprocessed_path if preprocessed_filename else original_path)
-    doctr_text, doctr_time = run_doctr(preprocessed_path if preprocessed_filename else original_path)
+    # Run OCR engines on preprocessed image
+    ocr_path = preprocessed_path if preprocessed_filename else original_path
+    tesseract_text, tesseract_time = run_tesseract(ocr_path)
+    easyocr_text, easyocr_time = run_easyocr(ocr_path)
+    doctr_text, doctr_time = run_doctr(ocr_path)
 
     # Parse results
     results = [

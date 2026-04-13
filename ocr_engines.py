@@ -1,3 +1,4 @@
+import re
 import time
 import traceback
 
@@ -7,6 +8,19 @@ import numpy as np
 # Lazy-loaded singletons
 _easyocr_reader = None
 _doctr_predictor = None
+
+
+def _clean_ocr_text(text: str) -> str:
+    """Remove OCR noise characters and clean up raw text."""
+    # Remove common OCR noise symbols
+    text = re.sub(r'[`~|{}\[\]\\@#$^&*_<>]+', '', text)
+    # Remove standalone single non-alphanumeric characters on a line
+    text = re.sub(r'^\s*[^\w\s\u0980-\u09FF]\s*$', '', text, flags=re.MULTILINE)
+    # Remove lines that are only dashes, dots, or equals
+    text = re.sub(r'^\s*[\-=\.]+\s*$', '', text, flags=re.MULTILINE)
+    # Collapse multiple blank lines into one
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
 
 
 def run_tesseract(image_path: str) -> tuple[str, float]:
@@ -19,7 +33,7 @@ def run_tesseract(image_path: str) -> tuple[str, float]:
         img = Image.open(image_path)
         text = pytesseract.image_to_string(img, lang="ben+eng", config="--psm 6")
         elapsed = time.time() - start
-        return text.strip(), elapsed
+        return _clean_ocr_text(text), elapsed
     except Exception as e:
         return f"[Tesseract error: {e}]\n{traceback.format_exc()}", 0.0
 
@@ -37,7 +51,7 @@ def run_easyocr(image_path: str) -> tuple[str, float]:
         results = _easyocr_reader.readtext(image_path, detail=0, paragraph=True)
         elapsed = time.time() - start
         text = "\n".join(results) if results else ""
-        return text.strip(), elapsed
+        return _clean_ocr_text(text), elapsed
     except Exception as e:
         return f"[EasyOCR error: {e}]\n{traceback.format_exc()}", 0.0
 
@@ -59,6 +73,6 @@ def run_doctr(image_path: str) -> tuple[str, float]:
 
         # Extract text from result
         text = result.render()
-        return text.strip(), elapsed
+        return _clean_ocr_text(text), elapsed
     except Exception as e:
         return f"[docTR error: {e}]\n{traceback.format_exc()}", 0.0

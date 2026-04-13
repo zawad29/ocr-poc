@@ -61,15 +61,17 @@ def _extract_nid_number(text: str) -> str | None:
 
 
 def _extract_dob(text: str) -> str | None:
-    # Look for Date of Birth label
+    # Look for Date of Birth label (handle OCR variants: Dare oi Birtn, Date: of Birth, etc.)
     m = re.search(
-        r'(?:Date\s*of\s*Birth|DOB|জন্ম\s*তারিখ)\s*[:\.\-]?\s*(.+?)(?:\n|ID|NID|$)',
+        r'(?:Dat[ea][:\s]*o[fi]\s*Birt[hn]|Date\s*of\s*Birth|DOB|জন্ম\s*তারিখ)\s*[:\.\-]?\s*(.+?)(?:\n|$)',
         text, re.IGNORECASE
     )
     if m:
         dob = _clean(m.group(1))
         # Remove quotes and extra punctuation from OCR
         dob = re.sub(r"['\"]", " ", dob)
+        # Stop before NID/ID labels or non-date content
+        dob = re.split(r'(?:NI?ID|AHD|ID\s*N|D\))', dob)[0]
         dob = re.sub(r'\s+', ' ', dob).strip()
         if dob:
             return dob
@@ -83,22 +85,25 @@ def _extract_dob(text: str) -> str | None:
 
 
 def _extract_name_en(text: str) -> str | None:
-    # Look for "Name" label followed by English text on same line
+    # Look for "Name" label (also handle OCR misreads: Nare, Narne, Nam)
+    # Use [^\n] to stay on same line, and capture only uppercase letter sequences typical of NID names
     m = re.search(
-        r'Name\s*[:\.]?\s*([A-Za-z][A-Za-z\s\'\.]+)',
-        text, re.IGNORECASE
+        r'(?:Name|Nare|Narne|Nam)\s*[:\.]?\s*([A-Z][A-Z\s\'\.]+)',
+        text
     )
     if m:
         name = _clean(m.group(1))
         name = name.replace("'", " ").strip()
         name = re.sub(r'\s+', ' ', name)
+        # Remove trailing short noise words (1-4 char non-name fragments from OCR)
+        name = re.sub(r'\s+[A-Za-z]{1,4}$', '', name)
         if len(name) > 3:
             return name
 
     # Look for "Name" on one line and the English name on the next line
     lines = text.split('\n')
     for i, line in enumerate(lines):
-        if re.search(r'\bNam[e]?\b', line, re.IGNORECASE) and i + 1 < len(lines):
+        if re.search(r'\b(?:Name|Nare|Narne|Nam)\b', line, re.IGNORECASE) and i + 1 < len(lines):
             next_line = lines[i + 1].strip()
             # Check if next line is mostly uppercase Latin
             if re.match(r'^[A-Z][A-Z\s\.]{5,}', next_line):
@@ -114,15 +119,15 @@ def _extract_name_en(text: str) -> str | None:
 
 
 def _extract_name_bn(text: str) -> str | None:
-    # Look for নাম label followed by Bengali text
+    # Look for নাম label (and OCR misreads like থম, নায়) followed by Bengali text
     m = re.search(
-        r'নাম\s*[:\.]?\s*([\u0980-\u09FF][\u0980-\u09FF\s\.]+)',
+        r'(?:নাম|থম|নায়)\s*[:\.]?\s*([\u0980-\u09FF][\u0980-\u09FF\s\.]+)',
         text
     )
     if m:
         name = _clean(m.group(1))
-        # Stop at next label (পিতা, মাতা, Name)
-        name = re.split(r'(?:পিতা|মাতা|Name|নাম)', name)[0]
+        # Stop at next label (পিতা, পতা, মাতা, Name)
+        name = re.split(r'(?:পিতা|পতা|মাতা|Name|নাম)', name)[0]
         return _clean(name) if _clean(name) else None
 
     # Fallback: first line with mostly Bengali characters after header lines
@@ -139,16 +144,16 @@ def _extract_name_bn(text: str) -> str | None:
             total_chars = len(re.sub(r'\s', '', line))
             if bengali_chars > 5 and total_chars > 0 and bengali_chars / total_chars > 0.6:
                 # Skip if this looks like father/mother line
-                if 'পিতা' not in line and 'মাতা' not in line:
+                if not re.search(r'পিতা|পতা|মাতা|সতা', line):
                     return _clean(line)
 
     return None
 
 
 def _extract_father(text: str) -> str | None:
-    # Bengali label পিতা
+    # Bengali label পিতা (and OCR misreads like পতা)
     m = re.search(
-        r'পিতা\s*[:\.]?\s*([\u0980-\u09FF][\u0980-\u09FF\s\.]+)',
+        r'(?:পিতা|পতা)\s*[:\.]?\s*([\u0980-\u09FF][\u0980-\u09FF\s\.]+)',
         text
     )
     if m:
@@ -169,9 +174,9 @@ def _extract_father(text: str) -> str | None:
 
 
 def _extract_mother(text: str) -> str | None:
-    # Bengali label মাতা (also handle OCR misread as মত or মাত)
+    # Bengali label মাতা (also handle OCR misreads: মত, মাত, সতা, সত)
     m = re.search(
-        r'(?:মাতা|মাত|মত)\s*[:\.]?\s*([\u0980-\u09FF][\u0980-\u09FF\s\.]+)',
+        r'(?:মাতা|মাত|মত|সতা|সত)\s*[:\.]?\s*([\u0980-\u09FF][\u0980-\u09FF\s\.]+)',
         text
     )
     if m:
