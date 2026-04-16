@@ -12,13 +12,15 @@ def preprocess_image(image_path: str) -> tuple[np.ndarray, str]:
     1. Upscale to ~300 DPI equivalent resolution
     2. Grayscale conversion
     3. Gaussian denoise (gentle, preserves text)
-    4. Normalize brightness/contrast
-    5. Unsharp mask sharpening
-    6. Deskew via Hough line detection
+    4. Background flatten (suppresses watermarks/seals via MORPH_CLOSE + divide)
+    5. Normalize brightness/contrast
+    6. Unsharp mask sharpening
+    7. Deskew via Hough line detection
 
-    No binarization or aggressive filtering — modern OCR engines perform
-    best on clean grayscale, especially for ID cards with holographic
-    or patterned security backgrounds.
+    No binarization — output stays grayscale. Background flattening wipes the
+    large holographic/seal watermarks that bleed into text recognition, while
+    leaving small dark features (letters) untouched because they don't survive
+    the large-kernel morphological close used to estimate the background.
     """
     img = cv2.imread(image_path)
     if img is None:
@@ -42,15 +44,26 @@ def preprocess_image(image_path: str) -> tuple[np.ndarray, str]:
     # Small kernel to smooth sensor noise without blurring text strokes
     denoised = cv2.GaussianBlur(gray, (3, 3), 0)
 
-    # Step 4: Normalize brightness and contrast
-    # Stretches histogram to full 0-255 range for consistent OCR input
-    normalized = cv2.normalize(denoised, None, 0, 255, cv2.NORM_MINMAX)
+    # Step 4: Background flatten
+    # MORPH_CLOSE with a 31x31 kernel fills small dark holes (letter strokes),
+    # yielding an estimate of just the light background + watermarks. Dividing
+    # the denoised image by that estimate pushes the watermark toward white
+    # while text stays dark.
+    bg_struct = cv2.getStructuringElement(cv2.MORPH_RECT, (31, 31))
+    background = cv2.morphologyEx(denoised, cv2.MORPH_CLOSE, bg_struct)
+    src_f = denoised.astype(np.float32)
+    bg_f = background.astype(np.float32) + 1.0
+    flattened = np.clip((src_f / bg_f) * 255.0, 0, 255).astype(np.uint8)
 
-    # Step 5: Unsharp mask — sharpens text edges
+    # Step 5: Normalize brightness and contrast
+    # Stretches histogram to full 0-255 range for consistent OCR input
+    normalized = cv2.normalize(flattened, None, 0, 255, cv2.NORM_MINMAX)
+
+    # Step 6: Unsharp mask — sharpens text edges
     blurred = cv2.GaussianBlur(normalized, (0, 0), 3)
     sharpened = cv2.addWeighted(normalized, 1.5, blurred, -0.5, 0)
 
-    # Step 6: Deskew
+    # Step 7: Deskew
     result = _deskew(sharpened)
 
     # Save preprocessed image

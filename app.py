@@ -9,6 +9,7 @@ from fastapi.templating import Jinja2Templates
 from preprocessing import preprocess_image
 from ocr_engines import run_tesseract, run_easyocr, run_doctr
 from parser import parse_nid_fields
+from preprocessing_lab import router as preprocessing_lab_router
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -17,6 +18,7 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 templates = Jinja2Templates(directory="templates")
+app.include_router(preprocessing_lab_router)
 
 
 @app.get("/", response_class=HTMLResponse)

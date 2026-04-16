@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Preprocessing Lab</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .lab-nav { text-align: center; margin-bottom: 1rem; }
+        .lab-nav a { color: #1a1a2e; text-decoration: none; font-size: 0.9rem; }
+        .lab-nav a:hover { text-decoration: underline; }
+        .param-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 0.75rem 1rem;
+            margin-top: 0.75rem;
+        }
+        .param-grid label {
+            display: flex;
+            flex-direction: column;
+            font-size: 0.85rem;
+            color: #555;
+            cursor: help;
+            position: relative;
+        }
+        .param-grid label .ti {
+            color: #2a6fb5;
+            font-size: 0.75rem;
+            margin-left: 0.25rem;
+        }
+        /* Custom hover tooltip (native title is slow/flaky) */
+        .param-grid label[data-tip]:hover::after,
+        .param-grid label[data-tip]:focus-within::after {
+            content: attr(data-tip);
+            position: absolute;
+            top: 100%;
+            left: 0;
+            margin-top: 0.35rem;
+            z-index: 20;
+            width: 280px;
+            max-width: 90vw;
+            background: #1a1a2e;
+            color: #fff;
+            padding: 0.55rem 0.7rem;
+            border-radius: 4px;
+            font-size: 0.78rem;
+            line-height: 1.45;
+            font-weight: normal;
+            white-space: normal;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            pointer-events: none;
+        }
+        .param-grid input[type="number"],
+        .param-grid select {
+            margin-top: 0.2rem;
+            padding: 0.3rem 0.4rem;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            background: #fff;
+        }
+        .param-block {
+            background: #fff;
+            padding: 1rem 1.25rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 1rem;
+        }
+        .param-block h3 {
+            color: #1a1a2e;
+            margin-bottom: 0.25rem;
+            font-size: 1rem;
+        }
+        .param-block .hint {
+            color: #888;
+            font-size: 0.8rem;
+            margin-bottom: 0.25rem;
+        }
+        .checkbox-row {
+            grid-column: 1 / -1;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-size: 0.85rem;
+            color: #555;
+        }
+        .lab-results-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1.5rem;
+        }
+        @media (max-width: 1100px) {
+            .lab-results-grid { grid-template-columns: 1fr; }
+        }
+        .error-box {
+            background: #fdecea;
+            color: #b71c1c;
+            border: 1px solid #f5c6c0;
+            padding: 0.75rem;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="lab-nav"><a href="/">&larr; Back to main OCR comparison</a></div>
+        <h1>Preprocessing Lab</h1>
+        <p class="subtitle">Compare two preprocessing pipelines side-by-side (Tesseract only)</p>
+
+        <form action="/preprocessing-lab" method="post" enctype="multipart/form-data">
+            <div class="upload-form">
+                <label for="image" class="file-label">
+                    <span>Choose NID Card Image</span>
+                    <input type="file" name="image" id="image" accept="image/*" required>
+                </label>
+                <button type="submit">Run Both</button>
+            </div>
+
+            <div class="param-block">
+                <h3>Option 1 — Grayscale Pipeline + Background Flatten (tunable)</h3>
+                <div class="hint">Upscale → Grayscale → Gaussian denoise → Background flatten → Normalize → Unsharp mask → Deskew. Stays grayscale (no binarization). Hover a label for details.</div>
+                <div class="param-grid">
+                    <label data-tip="Upscale target for the shortest side (pixels). ID cards need ~300 DPI equivalent for OCR — higher values give crisper text at the cost of speed. Default 1000 ≈ 300 DPI for a credit-card-sized image. Below ~800 text strokes get too thin for Tesseract.">v1_target_min_side <span class="ti">ⓘ</span>
+                        <input type="number" name="v1_target_min_side" value="{{ params.v1_target_min_side }}" min="100" step="50">
+                    </label>
+                    <label data-tip="Downscale cap for the longest side (pixels). Prevents oversized uploads from wasting CPU on irrelevant detail. Lower = faster, but going under ~2000 can blur small text on high-resolution scans.">v1_max_long_side <span class="ti">ⓘ</span>
+                        <input type="number" name="v1_max_long_side" value="{{ params.v1_max_long_side }}" min="100" step="50">
+                    </label>
+                    <label data-tip="Gaussian blur kernel size for denoising (must be odd). Larger suppresses sensor noise but thickens and blurs text strokes. 3 is intentionally gentle — raising to 5 may help a very noisy scan but usually hurts OCR.">v1_denoise_kernel (odd) <span class="ti">ⓘ</span>
+                        <input type="number" name="v1_denoise_kernel" value="{{ params.v1_denoise_kernel }}" min="1" step="2">
+                    </label>
+                    <label data-tip="Kernel size (pixels) for background estimation via MORPH_CLOSE. Must be larger than your thickest letter but small enough to follow watermarks. Too small = text strokes survive in the background estimate (watermark returns). Too large = slow and misses localized shading. Rule of thumb: 2–3× letter height.">v1_bg_kernel <span class="ti">ⓘ</span>
+                        <input type="number" name="v1_bg_kernel" value="{{ params.v1_bg_kernel }}" min="3" step="2">
+                    </label>
+                    <label data-tip="How background is removed. 'divide' = shading correction (gray / bg estimate); best for uneven lighting + watermarks, output looks photographic. 'subtract' = absolute difference then inverted; harsher, can wipe very faint watermarks more cleanly but may flatten midtones.">v1_bg_method <span class="ti">ⓘ</span>
+                        <select name="v1_bg_method">
+                            <option value="divide" {% if params.v1_bg_method == 'divide' %}selected{% endif %}>divide</option>
+                            <option value="subtract" {% if params.v1_bg_method == 'subtract' %}selected{% endif %}>subtract</option>
+                        </select>
+                    </label>
+                    <label data-tip="Blur sigma used inside the unsharp mask. Large sigma sharpens broad/low-frequency features (good for thick printed text); small sigma sharpens fine edges (good for small fonts). Too large creates visible halos around text.">v1_unsharp_sigma <span class="ti">ⓘ</span>
+                        <input type="number" name="v1_unsharp_sigma" value="{{ params.v1_unsharp_sigma }}" min="0.1" step="0.1">
+                    </label>
+                    <label data-tip="Weight of the original image in the unsharp mask (blur is weighted 1 - this). Higher = more aggressive sharpening. 1.0 = no change, 1.5 = moderate, >2.0 starts producing harsh halos and amplifying noise.">v1_unsharp_weight <span class="ti">ⓘ</span>
+                        <input type="number" name="v1_unsharp_weight" value="{{ params.v1_unsharp_weight }}" min="0" step="0.1">
+                    </label>
+                    <label data-tip="Minimum absolute skew angle (degrees) before deskew actually rotates the image. Guards against rotating from noise-driven false line detections. Lower = more eager to deskew; 0 applies any detected angle.">v1_deskew_angle_thresh <span class="ti">ⓘ</span>
+                        <input type="number" name="v1_deskew_angle_thresh" value="{{ params.v1_deskew_angle_thresh }}" min="0" step="0.1">
+                    </label>
+                    <label class="checkbox-row" data-tip="Turn background flattening on or off. Off = old Option 1 behavior (watermark/seal retained). On = MORPH_CLOSE background estimate is divided/subtracted out before normalize, wiping watermarks while keeping text dark.">
+                        <input type="checkbox" name="v1_bg_enable" value="true" {% if params.v1_bg_enable %}checked{% endif %}>
+                        Enable background flattening <span class="ti">ⓘ</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="param-block">
+                <h3>Option 2 — CLAHE + Adaptive Threshold + Morph Line Removal</h3>
+                <div class="hint">Upscale → Grayscale → CLAHE → Adaptive Gaussian Threshold → Morph line removal. Hover a label for details.</div>
+                <div class="param-grid">
+                    <label data-tip="Upscale target for the shortest side (pixels). Kept with same semantics as Option 1 so the two pipelines compare fairly. Change it in lockstep with v1_target_min_side unless you specifically want to test scale-sensitivity.">v2_target_min_side <span class="ti">ⓘ</span>
+                        <input type="number" name="v2_target_min_side" value="{{ params.v2_target_min_side }}" min="100" step="50">
+                    </label>
+                    <label data-tip="CLAHE contrast clip limit. Caps how much contrast any single tile can boost, preventing noise amplification in flat/empty regions. Low (1–2) = gentle; high (4+) = aggressive, sharper text but noisier watermarks/backgrounds.">clahe_clip <span class="ti">ⓘ</span>
+                        <input type="number" name="clahe_clip" value="{{ params.clahe_clip }}" min="0.1" step="0.1">
+                    </label>
+                    <label data-tip="CLAHE tile grid size (image is split into N×N tiles, each equalized independently). Larger N = more localized contrast — handles uneven lighting better but can amplify micro-noise. Smaller N = more global/smoother result.">clahe_tile (NxN) <span class="ti">ⓘ</span>
+                        <input type="number" name="clahe_tile" value="{{ params.clahe_tile }}" min="1" step="1">
+                    </label>
+                    <label data-tip="Adaptive threshold neighborhood size in pixels (must be odd). Threshold is computed from this window around each pixel. Smaller block = picks up fine/small text but gets noisy; larger block = smoother regions, may miss small characters. Tune alongside thresh_c.">thresh_block (odd, &ge;3) <span class="ti">ⓘ</span>
+                        <input type="number" name="thresh_block" value="{{ params.thresh_block }}" min="3" step="2">
+                    </label>
+                    <label data-tip="Constant subtracted from the local mean in adaptive threshold. Higher = more pixels become black (more text kept, more noise too); lower = fewer pixels become black (cleaner but may lose faint strokes). Typical range 5–15.">thresh_c <span class="ti">ⓘ</span>
+                        <input type="number" name="thresh_c" value="{{ params.thresh_c }}" step="1">
+                    </label>
+                    <label data-tip="Horizontal kernel length (pixels) used to detect long horizontal black lines (borders, table rules) after binarization. Lines at or above this length are removed. Too short removes letter strokes; too long misses shorter borders. Set to 0 to skip horizontal removal.">morph_h_len <span class="ti">ⓘ</span>
+                        <input type="number" name="morph_h_len" value="{{ params.morph_h_len }}" min="0" step="1">
+                    </label>
+                    <label data-tip="Vertical kernel length (pixels) for detecting long vertical lines (column separators, margins). Same tradeoff as morph_h_len. Set to 0 to skip vertical removal.">morph_v_len <span class="ti">ⓘ</span>
+                        <input type="number" name="morph_v_len" value="{{ params.morph_v_len }}" min="0" step="1">
+                    </label>
+                    <label class="checkbox-row" data-tip="Turn step 4 on or off globally. Off = binarized image is used as-is; on = morph_h_len / morph_v_len are applied and long straight lines are erased. OCR engines sometimes mis-read long lines as 'I' or 'l'.">
+                        <input type="checkbox" name="morph_enable" value="true" {% if params.morph_enable %}checked{% endif %}>
+                        Enable morphological line removal <span class="ti">ⓘ</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="param-block">
+                <h3>Option 3 — Background-flattened + Adaptive Threshold + Stroke Closing</h3>
+                <div class="hint">Upscale → Grayscale → Background flatten (divide by MORPH_CLOSE estimate) → CLAHE → Adaptive threshold → Stroke closing → Optional line removal. Fixes Option 2's watermark bleed and broken strokes.</div>
+                <div class="param-grid">
+                    <label data-tip="Upscale target for the shortest side (pixels). Same meaning as Option 1 / Option 2. Keep aligned for fair comparison.">v3_target_min_side <span class="ti">ⓘ</span>
+                        <input type="number" name="v3_target_min_side" value="{{ params.v3_target_min_side }}" min="100" step="50">
+                    </label>
+                    <label data-tip="Kernel size (pixels) for background estimation via MORPH_CLOSE. Must be larger than your thickest letter but small enough to follow watermarks. Too small = text strokes survive in the background estimate (bad). Too large = slow and misses localized shading. Rule of thumb: 2–3x letter height.">v3_bg_kernel <span class="ti">ⓘ</span>
+                        <input type="number" name="v3_bg_kernel" value="{{ params.v3_bg_kernel }}" min="3" step="2">
+                    </label>
+                    <label data-tip="How to combine original with background estimate. 'divide' = shading correction (gray / bg); best for uneven lighting + watermarks, results look photographic. 'subtract' = absolute difference then inverted; harsher but can wipe very faint watermarks more cleanly.">v3_bg_method <span class="ti">ⓘ</span>
+                        <select name="v3_bg_method">
+                            <option value="divide" {% if params.v3_bg_method == 'divide' %}selected{% endif %}>divide</option>
+                            <option value="subtract" {% if params.v3_bg_method == 'subtract' %}selected{% endif %}>subtract</option>
+                        </select>
+                    </label>
+                    <label data-tip="CLAHE clip limit on the flattened image. Usually set low (1.5–2.5) because flattening already normalizes contrast. Too high re-introduces noise that flattening just removed.">v3_clahe_clip <span class="ti">ⓘ</span>
+                        <input type="number" name="v3_clahe_clip" value="{{ params.v3_clahe_clip }}" min="0.1" step="0.1">
+                    </label>
+                    <label data-tip="CLAHE tile grid size. Same as Option 2's clahe_tile. 8 is a safe default on flattened images.">v3_clahe_tile (NxN) <span class="ti">ⓘ</span>
+                        <input type="number" name="v3_clahe_tile" value="{{ params.v3_clahe_tile }}" min="1" step="1">
+                    </label>
+                    <label data-tip="Adaptive threshold neighborhood (odd, ≥3). On a flattened image you can usually go smaller than Option 2 (e.g., 15–25) because there's no watermark gradient to fight.">v3_thresh_block (odd, &ge;3) <span class="ti">ⓘ</span>
+                        <input type="number" name="v3_thresh_block" value="{{ params.v3_thresh_block }}" min="3" step="2">
+                    </label>
+                    <label data-tip="Adaptive threshold constant. On flattened input you often want a lower C (5–10) since the flattening already suppresses the background.">v3_thresh_c <span class="ti">ⓘ</span>
+                        <input type="number" name="v3_thresh_c" value="{{ params.v3_thresh_c }}" step="1">
+                    </label>
+                    <label data-tip="Small morphological closing kernel (pixels) applied after binarization to rejoin broken letter strokes. 1–2 repairs hairline gaps without merging adjacent characters; 3+ starts fusing letters together.">v3_close_kernel <span class="ti">ⓘ</span>
+                        <input type="number" name="v3_close_kernel" value="{{ params.v3_close_kernel }}" min="0" step="1">
+                    </label>
+                    <label data-tip="Horizontal line-removal kernel length. Same as Option 2. Off by default here since background flattening already kills most lines.">v3_morph_h_len <span class="ti">ⓘ</span>
+                        <input type="number" name="v3_morph_h_len" value="{{ params.v3_morph_h_len }}" min="0" step="1">
+                    </label>
+                    <label data-tip="Vertical line-removal kernel length. Same as Option 2.">v3_morph_v_len <span class="ti">ⓘ</span>
+                        <input type="number" name="v3_morph_v_len" value="{{ params.v3_morph_v_len }}" min="0" step="1">
+                    </label>
+                    <label class="checkbox-row" data-tip="Enable the same horizontal/vertical line-removal step as Option 2. Usually unnecessary on flattened images — try it only if long borders survive flattening.">
+                        <input type="checkbox" name="v3_morph_enable" value="true" {% if params.v3_morph_enable %}checked{% endif %}>
+                        Enable morphological line removal <span class="ti">ⓘ</span>
+                    </label>
+                </div>
+            </div>
+        </form>
+
+        {% if original_image %}
+        <div class="images-section">
+            <div class="image-card">
+                <h3>Original</h3>
+                <img src="{{ original_image }}" alt="Original">
+            </div>
+            {% if v1_image %}
+            <div class="image-card">
+                <h3>Option 1</h3>
+                <img src="{{ v1_image }}" alt="Option 1 preprocessed">
+            </div>
+            {% endif %}
+            {% if v2_image %}
+            <div class="image-card">
+                <h3>Option 2</h3>
+                <img src="{{ v2_image }}" alt="Option 2 preprocessed">
+            </div>
+            {% endif %}
+            {% if v3_image %}
+            <div class="image-card">
+                <h3>Option 3</h3>
+                <img src="{{ v3_image }}" alt="Option 3 preprocessed">
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="lab-results-grid">
+            <div class="result-card">
+                <h2>Option 1 — Tesseract</h2>
+                {% if v1_error %}
+                <div class="error-box">{{ v1_error }}</div>
+                {% else %}
+                <span class="time-badge">{{ v1_time }}</span>
+                <h3>Raw OCR Output</h3>
+                <pre class="raw-text">{{ v1_text }}</pre>
+                {% endif %}
+            </div>
+            <div class="result-card">
+                <h2>Option 2 — Tesseract</h2>
+                {% if v2_error %}
+                <div class="error-box">{{ v2_error }}</div>
+                {% else %}
+                <span class="time-badge">{{ v2_time }}</span>
+                <h3>Raw OCR Output</h3>
+                <pre class="raw-text">{{ v2_text }}</pre>
+                {% endif %}
+            </div>
+            <div class="result-card">
+                <h2>Option 3 — Tesseract</h2>
+                {% if v3_error %}
+                <div class="error-box">{{ v3_error }}</div>
+                {% else %}
+                <span class="time-badge">{{ v3_time }}</span>
+                <h3>Raw OCR Output</h3>
+                <pre class="raw-text">{{ v3_text }}</pre>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>
