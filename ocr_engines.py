@@ -1,3 +1,5 @@
+from transformers.models import falcon
+import json
 import re
 import time
 import traceback
@@ -10,7 +12,8 @@ _TESSDATA_DIR = Path(__file__).parent / "trained_data"
 
 # Lazy-loaded singletons
 _easyocr_reader = None
-_doctr_predictor = None
+_surya_recognition_predictor = None
+_surya_detection_predictor = None
 
 
 def _clean_ocr_text(text: str) -> str:
@@ -70,23 +73,50 @@ def run_easyocr(image_path: str) -> tuple[str, float]:
         return f"[EasyOCR error: {e}]\n{traceback.format_exc()}", 0.0
 
 
-def run_doctr(image_path: str) -> tuple[str, float]:
-    """Run docTR OCR. Returns (raw_text, elapsed_seconds)."""
+def run_surya(image_path: str) -> tuple[str, float]:
+    """Run Surya OCR. Returns (raw_text, elapsed_seconds)."""
     try:
-        from doctr.io import DocumentFile
-        from doctr.models import ocr_predictor
+        from PIL import Image
+        from surya.foundation import FoundationPredictor
+        from surya.recognition import RecognitionPredictor
+        from surya.detection import DetectionPredictor
 
-        global _doctr_predictor
-        if _doctr_predictor is None:
-            _doctr_predictor = ocr_predictor(pretrained=True)
+        global _surya_recognition_predictor, _surya_detection_predictor
+        if _surya_recognition_predictor is None:
+            _surya_recognition_predictor = RecognitionPredictor(FoundationPredictor())
+            _surya_detection_predictor = DetectionPredictor()
 
+        image = Image.open(image_path)
         start = time.time()
-        doc = DocumentFile.from_images(image_path)
-        result = _doctr_predictor(doc)
+        predictions = _surya_recognition_predictor(
+            images=[image],
+            det_predictor=_surya_detection_predictor,
+            math_mode=False,
+            sort_lines=True
+        )
         elapsed = time.time() - start
 
-        # Extract text from result
-        text = result.render()
+        text = "\n".join(line.text for line in predictions[0].text_lines)
+
+        input_path = Path(image_path)
+        output_json_path = input_path.with_name(f"{input_path.stem}_output.json")
+        payload = {
+            "image": input_path.name,
+            "elapsed_seconds": elapsed,
+            "text_lines": [
+                {
+                    "text": line.text,
+                    "confidence": getattr(line, "confidence", None),
+                    "bbox": getattr(line, "bbox", None),
+                    "polygon": getattr(line, "polygon", None),
+                }
+                for line in predictions[0].text_lines
+            ],
+        }
+        with open(output_json_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
+
         return _clean_ocr_text(text), elapsed
     except Exception as e:
-        return f"[docTR error: {e}]\n{traceback.format_exc()}", 0.0
+        print(e)
+        return f"[Surya error: {e}]\n{traceback.format_exc()}", 0.0

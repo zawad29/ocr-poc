@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from preprocessing import preprocess_image
-from ocr_engines import run_tesseract, run_easyocr, run_doctr
+from ocr_engines import run_tesseract, run_easyocr, run_surya
 from parser import parse_nid_fields
 from preprocessing_lab import router as preprocessing_lab_router
 
@@ -48,7 +48,7 @@ async def process(request: Request, image: UploadFile = File(...)):
     ocr_path = preprocessed_path if preprocessed_filename else original_path
     tesseract_text, tesseract_time = run_tesseract(ocr_path)
     easyocr_text, easyocr_time = run_easyocr(ocr_path)
-    doctr_text, doctr_time = run_doctr(ocr_path)
+    surya_text, surya_time = run_surya(ocr_path)
 
     # Parse results
     results = [
@@ -65,10 +65,10 @@ async def process(request: Request, image: UploadFile = File(...)):
             "parsed": parse_nid_fields(easyocr_text),
         },
         {
-            "engine": "docTR",
-            "raw_text": doctr_text,
-            "time": f"{doctr_time:.2f}s",
-            "parsed": parse_nid_fields(doctr_text),
+            "engine": "Surya",
+            "raw_text": surya_text,
+            "time": f"{surya_time:.2f}s",
+            "parsed": parse_nid_fields(surya_text),
         },
     ]
 

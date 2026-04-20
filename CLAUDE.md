@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-A FastAPI web app that runs the same Bangladesh NID card image through three OCR engines (Tesseract, EasyOCR, docTR) side-by-side and parses structured fields (name in English/Bengali, father, mother, DOB, NID number) from each result. The goal is comparative evaluation, not production OCR.
+A FastAPI web app that runs the same Bangladesh NID card image through three OCR engines (Tesseract, EasyOCR, Surya) side-by-side and parses structured fields (name in English/Bengali, father, mother, DOB, NID number) from each result. The goal is comparative evaluation, not production OCR.
 
 ## Running
 
@@ -23,7 +23,7 @@ Three orthogonal modules, each deliberately standalone:
 
 - **`preprocessing.py`** — grayscale pipeline: upscale to ~1000px min side, grayscale, gentle Gaussian denoise, **background flatten (MORPH_CLOSE 31×31 + divide)** to suppress holographic seal/watermarks, histogram normalize, unsharp mask, Hough-based deskew. **No binarization, no thresholding.** The flatten step works because a large morphological close fills the small dark holes (letter strokes), producing a background estimate that text doesn't pollute — dividing by that estimate wipes the watermark without touching letters. Don't swap in Otsu/adaptive thresholding; the output is intentionally grayscale.
 
-- **`ocr_engines.py`** — one function per engine returning `(text, elapsed_seconds)`. EasyOCR and docTR models are lazy-loaded into module-level singletons (`_easyocr_reader`, `_doctr_predictor`) because model initialization is slow; preserve this pattern. Every engine is wrapped in a broad `try/except` that returns the error string as "text" so one engine failing never breaks the comparison view. All outputs pass through `_clean_ocr_text()` which strips common noise chars before parsing.
+- **`ocr_engines.py`** — one function per engine returning `(text, elapsed_seconds)`. EasyOCR and Surya models are lazy-loaded into module-level singletons (`_easyocr_reader`, `_surya_recognition_predictor`, `_surya_detection_predictor`) because model initialization is slow; preserve this pattern. Surya is invoked with task `"ocr_with_boxes"` and is script-agnostic (no language list — the model auto-detects Bengali + Latin). Every engine is wrapped in a broad `try/except` that returns the error string as "text" so one engine failing never breaks the comparison view. All outputs pass through `_clean_ocr_text()` which strips common noise chars before parsing.
 
 - **`parser.py`** — regex-based field extraction tuned specifically against **OCR misreads** of Bangladesh NID labels. The regexes intentionally match known garbled variants:
   - `NID` ↔ `ND`, `NO` ↔ `N0`

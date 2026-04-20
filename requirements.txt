@@ -5,6 +5,7 @@ jinja2>=3.1
 opencv-python-headless>=4.9
 pytesseract>=0.3.10
 easyocr>=1.7
-python-doctr[torch]>=0.9
+surya-ocr>=0.16
+transformers<5
 Pillow>=10.0
 numpy>=1.26
