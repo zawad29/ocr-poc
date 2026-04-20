@@ -1,9 +1,12 @@
 import re
 import time
 import traceback
+from pathlib import Path
 
 import cv2
 import numpy as np
+
+_TESSDATA_DIR = Path(__file__).parent / "trained_data"
 
 # Lazy-loaded singletons
 _easyocr_reader = None
@@ -29,9 +32,20 @@ def run_tesseract(image_path: str) -> tuple[str, float]:
         import pytesseract
         from PIL import Image
 
+        config = (
+            "--oem 1 "          # LSTM only (best accuracy)
+            "--psm 6 "          # Assume a uniform block of text
+                                # Try --psm 4 if card has a single column
+                                # Try --psm 11 for sparse text (address fields)
+            "-c tessedit_char_blacklist=|}{[]<>~^"  # Remove garbage chars
+            "-c preserve_interword_spaces=1"         # Keep spacing
+            "-c textord_heavy_nr=1"                  # Reduce noise region marking
+            f' --tessdata-dir "{_TESSDATA_DIR}"'     # Use project-local custom models
+        )
+
         start = time.time()
         img = Image.open(image_path)
-        text = pytesseract.image_to_string(img, lang="ben+eng", config="--psm 6")
+        text = pytesseract.image_to_string(img, lang="ben+eng", config=config)
         elapsed = time.time() - start
         return _clean_ocr_text(text), elapsed
     except Exception as e:
