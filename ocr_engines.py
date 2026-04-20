@@ -73,8 +73,8 @@ def run_easyocr(image_path: str) -> tuple[str, float]:
         return f"[EasyOCR error: {e}]\n{traceback.format_exc()}", 0.0
 
 
-def run_surya(image_path: str) -> tuple[str, float]:
-    """Run Surya OCR. Returns (raw_text, elapsed_seconds)."""
+def run_surya(image_path: str) -> tuple[str, float, list[dict]]:
+    """Run Surya OCR. Returns (raw_text, elapsed_seconds, text_lines)."""
     try:
         from PIL import Image
         from surya.foundation import FoundationPredictor
@@ -98,25 +98,27 @@ def run_surya(image_path: str) -> tuple[str, float]:
 
         text = "\n".join(line.text for line in predictions[0].text_lines)
 
+        lines = [
+            {
+                "text": line.text,
+                "confidence": getattr(line, "confidence", None),
+                "bbox": getattr(line, "bbox", None),
+                "polygon": getattr(line, "polygon", None),
+            }
+            for line in predictions[0].text_lines
+        ]
+
         input_path = Path(image_path)
         output_json_path = input_path.with_name(f"{input_path.stem}_output.json")
         payload = {
             "image": input_path.name,
             "elapsed_seconds": elapsed,
-            "text_lines": [
-                {
-                    "text": line.text,
-                    "confidence": getattr(line, "confidence", None),
-                    "bbox": getattr(line, "bbox", None),
-                    "polygon": getattr(line, "polygon", None),
-                }
-                for line in predictions[0].text_lines
-            ],
+            "text_lines": lines,
         }
         with open(output_json_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
 
-        return _clean_ocr_text(text), elapsed
+        return _clean_ocr_text(text), elapsed, lines
     except Exception as e:
         print(e)
-        return f"[Surya error: {e}]\n{traceback.format_exc()}", 0.0
+        return f"[Surya error: {e}]\n{traceback.format_exc()}", 0.0, []
