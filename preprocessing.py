@@ -3,39 +3,44 @@ import numpy as np
 import os
 
 
+CANONICAL_W = 1600
+CANONICAL_H = 1008  # ID-1 aspect ratio (85.60 x 53.98 mm => 1.587)
+
+
 def preprocess_image(image_path: str) -> tuple[np.ndarray, str]:
     """
     OCR preprocessing for ID card images with security patterns.
     Returns (preprocessed_array, saved_path).
 
     Pipeline:
-    1. Upscale to ~300 DPI equivalent resolution
-    2. Grayscale conversion
-    3. Gaussian denoise (gentle, preserves text)
-    4. Background flatten (suppresses watermarks/seals via MORPH_CLOSE + divide)
-    5. Normalize brightness/contrast
-    6. Unsharp mask sharpening
-    7. Deskew via Hough line detection
+    1. Normalize to canonical canvas (CANONICAL_W x CANONICAL_H):
+       - Detect the card quadrilateral and perspective-warp it to fill the
+         canvas (crop + deskew + resize in one step).
+       - If no card border is detectable, stretch-resize to the canonical size.
+    2. Grayscale conversion.
+    3. Gentle Gaussian denoise.
+    4. Background flatten (MORPH_CLOSE 31x31 + divide) to suppress
+       holographic/seal watermarks while leaving letters dark.
+    5. Histogram normalize.
+    6. Unsharp mask sharpening.
 
-    No binarization — output stays grayscale. Background flattening wipes the
-    large holographic/seal watermarks that bleed into text recognition, while
-    leaving small dark features (letters) untouched because they don't survive
-    the large-kernel morphological close used to estimate the background.
+    The output canvas size is a contract for downstream bbox-based parsers:
+    every preprocessed image is exactly CANONICAL_W x CANONICAL_H so spatial
+    thresholds stay consistent across cards. Output is grayscale — no
+    binarization or thresholding.
     """
     img = cv2.imread(image_path)
     if img is None:
         raise ValueError(f"Could not read image: {image_path}")
 
-    # Step 1: Scale to optimal size for OCR
-    # Target: shortest side ~1000px (roughly 300 DPI for ID card size)
-    h, w = img.shape[:2]
-    min_side = min(h, w)
-    if min_side < 1000:
-        scale = 1000 / min_side
-        img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-    elif max(h, w) > 3000:
-        scale = 3000 / max(h, w)
-        img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    # Step 1: normalize to canonical canvas
+    quad = _detect_card_quad(img)
+    if quad is not None:
+        img = _warp_to_canonical(img, quad)
+    else:
+        img = cv2.resize(
+            img, (CANONICAL_W, CANONICAL_H), interpolation=cv2.INTER_CUBIC
+        )
 
     # Step 2: Convert to grayscale
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -61,10 +66,7 @@ def preprocess_image(image_path: str) -> tuple[np.ndarray, str]:
 
     # Step 6: Unsharp mask — sharpens text edges
     blurred = cv2.GaussianBlur(normalized, (0, 0), 3)
-    sharpened = cv2.addWeighted(normalized, 1.5, blurred, -0.5, 0)
-
-    # Step 7: Deskew
-    result = _deskew(sharpened)
+    result = cv2.addWeighted(normalized, 1.5, blurred, -0.5, 0)
 
     # Save preprocessed image
     base, _ = os.path.splitext(os.path.basename(image_path))
@@ -76,38 +78,52 @@ def preprocess_image(image_path: str) -> tuple[np.ndarray, str]:
     return result, preprocessed_path
 
 
-def _deskew(image: np.ndarray) -> np.ndarray:
-    """Detect and correct skew angle using Hough Line Transform."""
-    edges = cv2.Canny(image, 50, 150, apertureSize=3)
-    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=100,
-                            minLineLength=100, maxLineGap=10)
+def _detect_card_quad(img: np.ndarray) -> np.ndarray | None:
+    """Find the 4-corner card quadrilateral. Returns points ordered
+    TL, TR, BR, BL as float32, or None if no suitable quad is detected."""
+    h, w = img.shape[:2]
+    img_area = float(h * w)
 
-    if lines is None or len(lines) < 5:
-        return image
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(blurred, 50, 150)
+    edges = cv2.dilate(edges, np.ones((3, 3), np.uint8), iterations=2)
 
-    angles = []
-    for line in lines:
-        x1, y1, x2, y2 = line[0]
-        if x2 - x1 == 0:
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours = sorted(contours, key=cv2.contourArea, reverse=True)
+
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area < 0.30 * img_area:
+            break  # remaining contours are smaller; stop
+        perimeter = cv2.arcLength(contour, True)
+        approx = cv2.approxPolyDP(contour, 0.02 * perimeter, True)
+        if len(approx) != 4 or not cv2.isContourConvex(approx):
             continue
-        angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
-        if abs(angle) < 15:
-            angles.append(angle)
+        return _order_points(approx.reshape(4, 2).astype(np.float32))
+    return None
 
-    if not angles:
-        return image
 
-    median_angle = np.median(angles)
-
-    if abs(median_angle) < 0.3:
-        return image
-
-    h, w = image.shape[:2]
-    center = (w // 2, h // 2)
-    M = cv2.getRotationMatrix2D(center, median_angle, 1.0)
-    rotated = cv2.warpAffine(
-        image, M, (w, h),
-        flags=cv2.INTER_CUBIC,
-        borderMode=cv2.BORDER_REPLICATE
+def _order_points(pts: np.ndarray) -> np.ndarray:
+    """Order 4 points as TL, TR, BR, BL using sum/diff of coordinates:
+    TL has smallest x+y, BR largest; TR has smallest y-x, BL largest."""
+    s = pts.sum(axis=1)
+    d = pts[:, 1] - pts[:, 0]
+    return np.array(
+        [pts[np.argmin(s)], pts[np.argmin(d)], pts[np.argmax(s)], pts[np.argmax(d)]],
+        dtype=np.float32,
     )
-    return rotated
+
+
+def _warp_to_canonical(img: np.ndarray, quad: np.ndarray) -> np.ndarray:
+    """Perspective-warp the detected quad to fill the canonical canvas."""
+    dst = np.array(
+        [[0, 0], [CANONICAL_W, 0], [CANONICAL_W, CANONICAL_H], [0, CANONICAL_H]],
+        dtype=np.float32,
+    )
+    M = cv2.getPerspectiveTransform(quad, dst)
+    return cv2.warpPerspective(
+        img, M, (CANONICAL_W, CANONICAL_H),
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
