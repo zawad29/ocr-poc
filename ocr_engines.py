@@ -29,8 +29,12 @@ def _clean_ocr_text(text: str) -> str:
     return text.strip()
 
 
-def run_tesseract(image_path: str) -> tuple[str, float]:
-    """Run Tesseract OCR. Returns (raw_text, elapsed_seconds)."""
+def run_tesseract(image_path: str) -> tuple[str, float, list[dict]]:
+    """Run Tesseract OCR. Returns (raw_text, elapsed_seconds, text_lines).
+
+    `text_lines` is a list of `{text, bbox, confidence}` where bbox is
+    `[x1, y1, x2, y2]` in image pixels. Words are grouped into lines by
+    Tesseract's `(block_num, par_num, line_num)`."""
     try:
         import pytesseract
         from PIL import Image
@@ -48,15 +52,48 @@ def run_tesseract(image_path: str) -> tuple[str, float]:
 
         start = time.time()
         img = Image.open(image_path)
-        text = pytesseract.image_to_string(img, lang="ben+eng", config=config)
+        data = pytesseract.image_to_data(
+            img, lang="ben+eng", config=config, output_type=pytesseract.Output.DICT
+        )
         elapsed = time.time() - start
-        return _clean_ocr_text(text), elapsed
+
+        groups: dict[tuple, list[int]] = {}
+        for i, txt in enumerate(data["text"]):
+            if not txt or not txt.strip():
+                continue
+            key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
+            groups.setdefault(key, []).append(i)
+
+        lines: list[dict] = []
+        for key, idxs in groups.items():
+            idxs.sort(key=lambda i: data["left"][i])
+            words = [data["text"][i].strip() for i in idxs if data["text"][i].strip()]
+            if not words:
+                continue
+            x1 = min(data["left"][i] for i in idxs)
+            y1 = min(data["top"][i] for i in idxs)
+            x2 = max(data["left"][i] + data["width"][i] for i in idxs)
+            y2 = max(data["top"][i] + data["height"][i] for i in idxs)
+            confs = [float(data["conf"][i]) for i in idxs if float(data["conf"][i]) >= 0]
+            mean_conf = (sum(confs) / len(confs) / 100.0) if confs else None
+            lines.append({
+                "text": " ".join(words),
+                "bbox": [float(x1), float(y1), float(x2), float(y2)],
+                "confidence": mean_conf,
+            })
+
+        lines.sort(key=lambda l: (l["bbox"][1], l["bbox"][0]))
+        text = "\n".join(l["text"] for l in lines)
+        return _clean_ocr_text(text), elapsed, lines
     except Exception as e:
-        return f"[Tesseract error: {e}]\n{traceback.format_exc()}", 0.0
+        return f"[Tesseract error: {e}]\n{traceback.format_exc()}", 0.0, []
 
 
-def run_easyocr(image_path: str) -> tuple[str, float]:
-    """Run EasyOCR. Returns (raw_text, elapsed_seconds)."""
+def run_easyocr(image_path: str) -> tuple[str, float, list[dict]]:
+    """Run EasyOCR. Returns (raw_text, elapsed_seconds, text_lines).
+
+    `text_lines` carries `{text, bbox, confidence}`; bboxes are axis-aligned
+    rectangles derived from EasyOCR's 4-point polygon output."""
     try:
         import easyocr
 
@@ -65,12 +102,26 @@ def run_easyocr(image_path: str) -> tuple[str, float]:
             _easyocr_reader = easyocr.Reader(["bn", "en"], gpu=False)
 
         start = time.time()
-        results = _easyocr_reader.readtext(image_path, detail=0, paragraph=True)
+        results = _easyocr_reader.readtext(image_path, detail=1, paragraph=False)
         elapsed = time.time() - start
-        text = "\n".join(results) if results else ""
-        return _clean_ocr_text(text), elapsed
+
+        lines: list[dict] = []
+        for polygon, txt, conf in results:
+            if not txt or not txt.strip():
+                continue
+            xs = [float(p[0]) for p in polygon]
+            ys = [float(p[1]) for p in polygon]
+            lines.append({
+                "text": txt.strip(),
+                "bbox": [min(xs), min(ys), max(xs), max(ys)],
+                "confidence": float(conf) if conf is not None else None,
+            })
+
+        lines.sort(key=lambda l: (l["bbox"][1], l["bbox"][0]))
+        text = "\n".join(l["text"] for l in lines)
+        return _clean_ocr_text(text), elapsed, lines
     except Exception as e:
-        return f"[EasyOCR error: {e}]\n{traceback.format_exc()}", 0.0
+        return f"[EasyOCR error: {e}]\n{traceback.format_exc()}", 0.0, []
 
 
 def run_surya(image_path: str) -> tuple[str, float, list[dict]]:
@@ -103,20 +154,9 @@ def run_surya(image_path: str) -> tuple[str, float, list[dict]]:
                 "text": line.text,
                 "confidence": getattr(line, "confidence", None),
                 "bbox": getattr(line, "bbox", None),
-                "polygon": getattr(line, "polygon", None),
             }
             for line in predictions[0].text_lines
         ]
-
-        input_path = Path(image_path)
-        output_json_path = input_path.with_name(f"{input_path.stem}_output.json")
-        payload = {
-            "image": input_path.name,
-            "elapsed_seconds": elapsed,
-            "text_lines": lines,
-        }
-        with open(output_json_path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
 
         return _clean_ocr_text(text), elapsed, lines
     except Exception as e:

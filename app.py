@@ -1,3 +1,4 @@
+import json
 import os
 import uuid
 
@@ -8,7 +9,7 @@ from fastapi.templating import Jinja2Templates
 
 from preprocessing import preprocess_image
 from ocr_engines import run_tesseract, run_easyocr, run_surya
-from parser import parse_nid_fields
+from bbox_parser import parse_nid_fields_by_bbox
 from surya_parser import parse_surya_nid_fields
 from preprocessing_lab import router as preprocessing_lab_router
 
@@ -40,16 +41,33 @@ async def process(request: Request, image: UploadFile = File(...)):
 
     # Preprocess
     try:
-        _, preprocessed_path = preprocess_image(original_path)
+        preprocessed_array, preprocessed_path = preprocess_image(original_path)
         preprocessed_filename = os.path.basename(preprocessed_path)
     except Exception as e:
+        preprocessed_array = None
         preprocessed_filename = None
 
     # Run OCR engines on preprocessed image
     ocr_path = preprocessed_path if preprocessed_filename else original_path
-    tesseract_text, tesseract_time = run_tesseract(ocr_path)
-    easyocr_text, easyocr_time = run_easyocr(ocr_path)
+    tesseract_text, tesseract_time, tesseract_lines = run_tesseract(ocr_path)
+    easyocr_text, easyocr_time, easyocr_lines = run_easyocr(ocr_path)
     surya_text, surya_time, surya_lines = run_surya(ocr_path)
+
+
+    # Debug: dump raw bbox output per engine next to the preprocessed image
+    stem, _ = os.path.splitext(os.path.basename(ocr_path))
+    for engine_name, engine_lines in (
+        ("tesseract", tesseract_lines),
+        ("easyocr", easyocr_lines),
+        ("surya", surya_lines),
+    ):
+        debug_path = os.path.join(UPLOAD_DIR, f"{stem}_{engine_name}_lines.json")
+        with open(debug_path, "w", encoding="utf-8") as f:
+            json.dump(
+                {"engine": engine_name, "image": os.path.basename(ocr_path),
+                 "text_lines": engine_lines},
+                f, ensure_ascii=False, indent=2, default=str,
+            )
 
     # Parse results
     results = [
@@ -57,13 +75,13 @@ async def process(request: Request, image: UploadFile = File(...)):
             "engine": "Tesseract",
             "raw_text": tesseract_text,
             "time": f"{tesseract_time:.2f}s",
-            "parsed": parse_nid_fields(tesseract_text),
+            "parsed": parse_nid_fields_by_bbox(tesseract_lines, preprocessed_array, engine="Tesseract"),
         },
         {
             "engine": "EasyOCR",
             "raw_text": easyocr_text,
             "time": f"{easyocr_time:.2f}s",
-            "parsed": parse_nid_fields(easyocr_text),
+            "parsed": parse_nid_fields_by_bbox(easyocr_lines, preprocessed_array, engine="EasyOCR"),
         },
         {
             "engine": "Surya",
