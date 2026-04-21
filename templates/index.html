@@ -11,13 +11,33 @@
         <h1>Bangladesh NID Card OCR Comparison</h1>
         <p class="subtitle">Compare Tesseract, EasyOCR, and Surya on National ID cards</p>
 
-        <form action="/" method="post" enctype="multipart/form-data" class="upload-form">
+        <form action="/" method="post" enctype="multipart/form-data" class="upload-form" id="upload-form">
             <label for="image" class="file-label">
                 <span>Choose NID Card Image</span>
                 <input type="file" name="image" id="image" accept="image/*" required>
             </label>
             <button type="submit">Process</button>
         </form>
+
+        <div class="loader-overlay" id="loader-overlay">
+            <div class="loader-box">
+                <div class="spinner"></div>
+                <p>Running OCR engines… this can take a bit.</p>
+            </div>
+        </div>
+
+        <script>
+            document.getElementById('upload-form').addEventListener('submit', function (e) {
+                var overlay = document.getElementById('loader-overlay');
+                overlay.classList.add('active');
+                // Force the browser to paint the overlay before the upload blocks the main thread.
+                void overlay.offsetWidth;
+            });
+            // If the user navigates back via bfcache, hide the overlay again.
+            window.addEventListener('pageshow', function () {
+                document.getElementById('loader-overlay').classList.remove('active');
+            });
+        </script>
 
         {% if original_image %}
         <div class="images-section">

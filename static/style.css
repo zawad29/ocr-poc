@@ -174,3 +174,45 @@ td:first-child {
     white-space: nowrap;
     width: 40%;
 }
+
+.loader-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 9999;
+    align-items: center;
+    justify-content: center;
+}
+
+.loader-overlay.active {
+    display: flex;
+}
+
+.loader-box {
+    background: #fff;
+    padding: 2rem 2.5rem;
+    border-radius: 12px;
+    text-align: center;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+}
+
+.loader-box p {
+    margin-top: 1rem;
+    color: #333;
+    font-weight: 500;
+}
+
+.spinner {
+    width: 48px;
+    height: 48px;
+    margin: 0 auto;
+    border: 5px solid #e5e5e5;
+    border-top-color: #1a1a2e;
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
