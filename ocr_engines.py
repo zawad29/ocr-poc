@@ -1,5 +1,6 @@
 from transformers.models import falcon
 import json
+import os
 import re
 import time
 import traceback
@@ -14,6 +15,23 @@ _TESSDATA_DIR = Path(__file__).parent / "trained_data"
 _easyocr_reader = None
 _surya_recognition_predictor = None
 _surya_detection_predictor = None
+_ollama_client = None
+
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma4:latest")
+
+_OLLAMA_SYSTEM_PROMPT = (
+    "You extract fields from a Bangladesh National ID (NID) card image. "
+    "Return ONLY a single JSON object with exactly these string keys: "
+    "name_en, name_bn, father, mother, dob, nid_number. "
+    "name_en is the English name on the card. "
+    "name_bn is the Bengali (\u09ac\u09be\u0982\u09b2\u09be) name. "
+    "father and mother are parent names as shown (keep the original script). "
+    "dob is the date of birth in 'DD Month YYYY' form exactly as written. "
+    "nid_number is the digits of the ID/NID number, no spaces. "
+    "Use an empty string for any field that is not clearly visible. "
+    "Do not include any other keys, commentary, markdown, or code fences."
+)
 
 
 def _clean_ocr_text(text: str) -> str:
@@ -162,3 +180,47 @@ def run_surya(image_path: str) -> tuple[str, float, list[dict]]:
     except Exception as e:
         print(e)
         return f"[Surya error: {e}]\n{traceback.format_exc()}", 0.0, []
+
+
+def run_ollama(image_path: str) -> tuple[str, float, list[dict]]:
+    """Send the preprocessed image to an Ollama vision LLM and ask for structured JSON.
+
+    Returns (raw_response_text, elapsed_seconds, []). The third slot is an empty
+    list because this engine has no per-line bboxes; the caller parses the JSON
+    directly instead of going through bbox_parser."""
+    try:
+        import ollama
+
+        global _ollama_client
+        if _ollama_client is None:
+            _ollama_client = ollama.Client(host=OLLAMA_HOST)
+
+        with open(image_path, "rb") as f:
+            image_bytes = f.read()
+
+        start = time.time()
+        response = _ollama_client.chat(
+            model=OLLAMA_MODEL,
+            messages=[
+                {"role": "system", "content": _OLLAMA_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": "Extract the NID fields from this image and return the JSON object.",
+                    "images": [image_bytes],
+                },
+            ],
+            format="json",
+            think=False,
+            stream=False,
+            options={
+                "temperature": 0,
+                "num_ctx": 2048,
+                "num_predict": 512,
+            },
+        )
+        elapsed = time.time() - start
+
+        content = response["message"]["content"] if isinstance(response, dict) else response.message.content
+        return content or "", elapsed, []
+    except Exception as e:
+        return f"[Ollama error: {e}]\n{traceback.format_exc()}", 0.0, []

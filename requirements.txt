@@ -9,3 +9,4 @@ surya-ocr>=0.16
 transformers<5
 Pillow>=10.0
 numpy>=1.26
+ollama>=0.3
