@@ -24,9 +24,13 @@ _OLLAMA_SYSTEM_PROMPT = (
     "You extract fields from a Bangladesh National ID (NID) card image. "
     "Return ONLY a single JSON object with exactly these string keys: "
     "name_en, name_bn, father, mother, dob, nid_number. "
-    "name_en is the English name on the card. "
-    "name_bn is the Bengali (\u09ac\u09be\u0982\u09b2\u09be) name. "
-    "father and mother are parent names as shown (keep the original script). "
+    "CRITICAL: Copy every value EXACTLY as printed on the card, character for character. "
+    "Do NOT translate, transliterate, romanize, or convert between scripts. "
+    "If a value is printed in Bengali script (\u0985-\u09FF), the output MUST remain in Bengali script. "
+    "If it is printed in Latin letters, keep it in Latin letters. "
+    "name_en is the English/Latin name as printed. "
+    "name_bn is the Bengali name as printed (Bengali Unicode characters only). "
+    "father and mother are the parent names as printed \u2014 preserve the exact script of the source. "
     "dob is the date of birth in 'DD Month YYYY' form exactly as written. "
     "nid_number is the digits of the ID/NID number, no spaces. "
     "Use an empty string for any field that is not clearly visible. "
@@ -214,6 +218,7 @@ def run_ollama(image_path: str) -> tuple[str, float, list[dict]]:
             stream=False,
             options={
                 "temperature": 0,
+                "seed": 42,
                 "num_ctx": 2048,
                 "num_predict": 512,
             },
