@@ -20,6 +20,24 @@ _ollama_client = None
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma4:latest")
 
+_OLLAMA_TEXT_SYSTEM_PROMPT = (
+    "You receive raw OCR output from a Bangladesh National ID (NID) card. "
+    "The OCR text may have fields out of order, noise, or missing characters. "
+    "Return ONLY a single JSON object with exactly these string keys: "
+    "name_en, name_bn, father, mother, dob, nid_number. "
+    "CRITICAL: Copy each field value EXACTLY as it appears in the OCR text, character for character. "
+    "Do NOT translate, transliterate, romanize, clean up spelling, or guess missing characters. "
+    "If a value appears in Bengali script (অ-৿) in the OCR text, the output MUST remain in Bengali script. "
+    "If it appears in Latin letters, keep it in Latin letters. "
+    "name_en is the English/Latin name. "
+    "name_bn is the Bengali name (Bengali Unicode only). "
+    "father and mother are the parent names as written in the OCR text — preserve the exact script. "
+    "dob is the date of birth in 'DD Month YYYY' form exactly as written. "
+    "nid_number is the digits of the ID/NID number, no spaces. "
+    "Use an empty string for any field that is not present in the OCR text. "
+    "Do not include any other keys, commentary, markdown, or code fences."
+)
+
 _OLLAMA_SYSTEM_PROMPT = (
     "You extract fields from a Bangladesh National ID (NID) card image. "
     "Return ONLY a single JSON object with exactly these string keys: "
@@ -221,6 +239,44 @@ def run_ollama(image_path: str) -> tuple[str, float, list[dict]]:
                 "seed": 42,
                 "num_ctx": 2048,
                 "num_predict": 512,
+            },
+        )
+        elapsed = time.time() - start
+
+        content = response["message"]["content"] if isinstance(response, dict) else response.message.content
+        return content or "", elapsed, []
+    except Exception as e:
+        return f"[Ollama error: {e}]\n{traceback.format_exc()}", 0.0, []
+
+
+def run_ollama_parse_text(raw_text: str) -> tuple[str, float, list[dict]]:
+    """Feed OCR text (from another engine) to the Ollama LLM for structured JSON extraction.
+
+    Text-only path — no image is sent. Returns (raw_response_text, elapsed_seconds, [])."""
+    if not raw_text or raw_text.startswith("[") and "error:" in raw_text[:30]:
+        return "{}", 0.0, []
+    try:
+        import ollama
+
+        global _ollama_client
+        if _ollama_client is None:
+            _ollama_client = ollama.Client(host=OLLAMA_HOST)
+
+        start = time.time()
+        response = _ollama_client.chat(
+            model=OLLAMA_MODEL,
+            messages=[
+                {"role": "system", "content": _OLLAMA_TEXT_SYSTEM_PROMPT},
+                {"role": "user", "content": raw_text},
+            ],
+            format="json",
+            think=False,
+            stream=False,
+            options={
+                "temperature": 0,
+                "seed": 0,
+                "num_ctx": 1024,
+                "num_predict": 256,
             },
         )
         elapsed = time.time() - start

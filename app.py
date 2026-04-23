@@ -8,7 +8,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from preprocessing import preprocess_image
-from ocr_engines import run_tesseract, run_easyocr, run_surya, run_ollama, OLLAMA_MODEL
+from ocr_engines import (
+    run_tesseract, run_easyocr, run_surya, run_ollama, run_ollama_parse_text,
+    OLLAMA_MODEL,
+)
 from bbox_parser import parse_nid_fields_by_bbox
 from surya_parser import parse_surya_nid_fields
 from preprocessing_lab import router as preprocessing_lab_router
@@ -53,6 +56,8 @@ async def process(request: Request, image: UploadFile = File(...)):
     easyocr_text, easyocr_time, easyocr_lines = run_easyocr(ocr_path)
     surya_text, surya_time, surya_lines = run_surya(ocr_path)
     ollama_text, ollama_time, _ = run_ollama(ocr_path)
+    surya_llm_text, surya_llm_time, _ = run_ollama_parse_text(surya_text)
+    easyocr_llm_text, easyocr_llm_time, _ = run_ollama_parse_text(easyocr_text)
 
 
     # Debug: dump raw bbox output per engine next to the preprocessed image
@@ -79,15 +84,39 @@ async def process(request: Request, image: UploadFile = File(...)):
             f, ensure_ascii=False, indent=2,
         )
 
-    # Coerce Ollama JSON response into the six-field schema
+    # Dump Surya→Ollama raw response for debugging
+    surya_ollama_debug_path = os.path.join(UPLOAD_DIR, f"{stem}_surya_ollama_response.json")
+    with open(surya_ollama_debug_path, "w", encoding="utf-8") as f:
+        json.dump(
+            {"engine": "surya_ollama", "model": OLLAMA_MODEL, "image": os.path.basename(ocr_path),
+             "surya_ocr_text": surya_text, "llm_raw_text": surya_llm_text},
+            f, ensure_ascii=False, indent=2,
+        )
+
+    # Dump EasyOCR→Ollama raw response for debugging
+    easyocr_ollama_debug_path = os.path.join(UPLOAD_DIR, f"{stem}_easyocr_ollama_response.json")
+    with open(easyocr_ollama_debug_path, "w", encoding="utf-8") as f:
+        json.dump(
+            {"engine": "easyocr_ollama", "model": OLLAMA_MODEL, "image": os.path.basename(ocr_path),
+             "easyocr_ocr_text": easyocr_text, "llm_raw_text": easyocr_llm_text},
+            f, ensure_ascii=False, indent=2,
+        )
+
+    # Coerce Ollama JSON responses into the six-field schema
     _ollama_keys = ("name_en", "name_bn", "father", "mother", "dob", "nid_number")
-    try:
-        _ollama_obj = json.loads(ollama_text)
-        if not isinstance(_ollama_obj, dict):
-            _ollama_obj = {}
-    except (json.JSONDecodeError, TypeError):
-        _ollama_obj = {}
-    ollama_parsed = {k: str(_ollama_obj.get(k, "") or "") for k in _ollama_keys}
+
+    def _coerce_nid_json(s: str) -> dict:
+        try:
+            obj = json.loads(s)
+            if not isinstance(obj, dict):
+                obj = {}
+        except (json.JSONDecodeError, TypeError):
+            obj = {}
+        return {k: str(obj.get(k, "") or "") for k in _ollama_keys}
+
+    ollama_parsed = _coerce_nid_json(ollama_text)
+    surya_llm_parsed = _coerce_nid_json(surya_llm_text)
+    easyocr_llm_parsed = _coerce_nid_json(easyocr_llm_text)
 
     # Parse results
     results = [
@@ -114,6 +143,18 @@ async def process(request: Request, image: UploadFile = File(...)):
             "raw_text": ollama_text,
             "time": f"{ollama_time:.2f}s",
             "parsed": ollama_parsed,
+        },
+        {
+            "engine": f"Surya → Ollama ({OLLAMA_MODEL})",
+            "raw_text": surya_llm_text,
+            "time": f"{surya_time + surya_llm_time:.2f}s",
+            "parsed": surya_llm_parsed,
+        },
+        {
+            "engine": f"EasyOCR → Ollama ({OLLAMA_MODEL})",
+            "raw_text": easyocr_llm_text,
+            "time": f"{easyocr_time + easyocr_llm_time:.2f}s",
+            "parsed": easyocr_llm_parsed,
         },
     ]
 
