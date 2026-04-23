@@ -19,6 +19,7 @@ _ollama_client = None
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma4:latest")
+OLLAMA_OCR_MODEL = os.environ.get("OLLAMA_OCR_MODEL", "maternion/LightOnOCR-2")
 
 _OLLAMA_TEXT_SYSTEM_PROMPT = (
     "You receive raw OCR output from a Bangladesh National ID (NID) card. "
@@ -247,6 +248,49 @@ def run_ollama(image_path: str) -> tuple[str, float, list[dict]]:
         return content or "", elapsed, []
     except Exception as e:
         return f"[Ollama error: {e}]\n{traceback.format_exc()}", 0.0, []
+
+
+def run_ollama_ocr(image_path: str) -> tuple[str, float, list[dict]]:
+    """Run a vision Ollama model (e.g. LightOnOCR) as a raw OCR transcriber.
+
+    The model is expected to output plain text (not structured JSON). Returns
+    (raw_text, elapsed_seconds, []). Use this as stage 1 of a two-stage pipeline
+    where `run_ollama_parse_text` then extracts structured fields."""
+    try:
+        import ollama
+
+        global _ollama_client
+        if _ollama_client is None:
+            _ollama_client = ollama.Client(host=OLLAMA_HOST)
+
+        with open(image_path, "rb") as f:
+            image_bytes = f.read()
+
+        start = time.time()
+        response = _ollama_client.chat(
+            model=OLLAMA_OCR_MODEL,
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Transcribe all text visible on this Bangladesh NID card, preserving the original script (Bengali or Latin) exactly as printed. Output plain text only.",
+                    "images": [image_bytes],
+                },
+            ],
+            think=False,
+            stream=False,
+            options={
+                "temperature": 0,
+                "seed": 42,
+                "num_ctx": 2048,
+                "num_predict": 512,
+            },
+        )
+        elapsed = time.time() - start
+
+        content = response["message"]["content"] if isinstance(response, dict) else response.message.content
+        return content or "", elapsed, []
+    except Exception as e:
+        return f"[Ollama OCR error: {e}]\n{traceback.format_exc()}", 0.0, []
 
 
 def run_ollama_parse_text(raw_text: str) -> tuple[str, float, list[dict]]:
