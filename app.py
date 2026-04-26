@@ -9,8 +9,8 @@ from fastapi.templating import Jinja2Templates
 
 from preprocessing import preprocess_image
 from ocr_engines import (
-    run_tesseract, run_easyocr, run_surya, run_ollama, run_ollama_parse_text,
-    run_ollama_ocr, OLLAMA_MODEL, OLLAMA_OCR_MODEL,
+    run_surya, run_ollama, run_ollama_parse_text,
+    OLLAMA_MODEL,
 )
 from bbox_parser import parse_nid_fields_by_bbox
 from surya_parser import parse_surya_nid_fields
@@ -52,21 +52,14 @@ async def process(request: Request, image: UploadFile = File(...)):
 
     # Run OCR engines on preprocessed image
     ocr_path = preprocessed_path if preprocessed_filename else original_path
-    tesseract_text, tesseract_time, tesseract_lines = run_tesseract(ocr_path)
-    easyocr_text, easyocr_time, easyocr_lines = run_easyocr(ocr_path)
     surya_text, surya_time, surya_lines = run_surya(ocr_path)
     ollama_text, ollama_time, _ = run_ollama(ocr_path)
     surya_llm_text, surya_llm_time, _ = run_ollama_parse_text(surya_text)
-    easyocr_llm_text, easyocr_llm_time, _ = run_ollama_parse_text(easyocr_text)
-    ollama_ocr_text, ollama_ocr_time, _ = run_ollama_ocr(ocr_path)
-    ollama_ocr_llm_text, ollama_ocr_llm_time, _ = run_ollama_parse_text(ollama_ocr_text)
 
 
     # Debug: dump raw bbox output per engine next to the preprocessed image
     stem, _ = os.path.splitext(os.path.basename(ocr_path))
     for engine_name, engine_lines in (
-        ("tesseract", tesseract_lines),
-        ("easyocr", easyocr_lines),
         ("surya", surya_lines),
     ):
         debug_path = os.path.join(UPLOAD_DIR, f"{stem}_{engine_name}_lines.json")
@@ -95,25 +88,6 @@ async def process(request: Request, image: UploadFile = File(...)):
             f, ensure_ascii=False, indent=2,
         )
 
-    # Dump EasyOCR→Ollama raw response for debugging
-    easyocr_ollama_debug_path = os.path.join(UPLOAD_DIR, f"{stem}_easyocr_ollama_response.json")
-    with open(easyocr_ollama_debug_path, "w", encoding="utf-8") as f:
-        json.dump(
-            {"engine": "easyocr_ollama", "model": OLLAMA_MODEL, "image": os.path.basename(ocr_path),
-             "easyocr_ocr_text": easyocr_text, "llm_raw_text": easyocr_llm_text},
-            f, ensure_ascii=False, indent=2,
-        )
-
-    # Dump two-stage Ollama (LightOnOCR → Gemma) raw response for debugging
-    ollama_ocr_debug_path = os.path.join(UPLOAD_DIR, f"{stem}_ollama_ocr_response.json")
-    with open(ollama_ocr_debug_path, "w", encoding="utf-8") as f:
-        json.dump(
-            {"engine": "ollama_ocr_ollama", "ocr_model": OLLAMA_OCR_MODEL, "parse_model": OLLAMA_MODEL,
-             "image": os.path.basename(ocr_path),
-             "ocr_raw_text": ollama_ocr_text, "llm_raw_text": ollama_ocr_llm_text},
-            f, ensure_ascii=False, indent=2,
-        )
-
     # Coerce Ollama JSON responses into the six-field schema
     _ollama_keys = ("name_en", "name_bn", "father", "mother", "dob", "nid_number")
 
@@ -128,23 +102,9 @@ async def process(request: Request, image: UploadFile = File(...)):
 
     ollama_parsed = _coerce_nid_json(ollama_text)
     surya_llm_parsed = _coerce_nid_json(surya_llm_text)
-    easyocr_llm_parsed = _coerce_nid_json(easyocr_llm_text)
-    ollama_ocr_llm_parsed = _coerce_nid_json(ollama_ocr_llm_text)
 
     # Parse results
     results = [
-        {
-            "engine": "Tesseract",
-            "raw_text": tesseract_text,
-            "time": f"{tesseract_time:.2f}s",
-            "parsed": parse_nid_fields_by_bbox(tesseract_lines, preprocessed_array, engine="Tesseract"),
-        },
-        {
-            "engine": "EasyOCR",
-            "raw_text": easyocr_text,
-            "time": f"{easyocr_time:.2f}s",
-            "parsed": parse_nid_fields_by_bbox(easyocr_lines, preprocessed_array, engine="EasyOCR"),
-        },
         {
             "engine": "Surya",
             "raw_text": surya_text,
@@ -162,18 +122,6 @@ async def process(request: Request, image: UploadFile = File(...)):
             "raw_text": surya_llm_text,
             "time": f"{surya_time + surya_llm_time:.2f}s",
             "parsed": surya_llm_parsed,
-        },
-        {
-            "engine": f"EasyOCR → Ollama ({OLLAMA_MODEL})",
-            "raw_text": easyocr_llm_text,
-            "time": f"{easyocr_time + easyocr_llm_time:.2f}s",
-            "parsed": easyocr_llm_parsed,
-        },
-        {
-            "engine": f"Ollama OCR ({OLLAMA_OCR_MODEL}) → Ollama ({OLLAMA_MODEL})",
-            "raw_text": f"--- OCR ({OLLAMA_OCR_MODEL}) ---\n{ollama_ocr_text}\n\n--- LLM ({OLLAMA_MODEL}) ---\n{ollama_ocr_llm_text}",
-            "time": f"{ollama_ocr_time + ollama_ocr_llm_time:.2f}s",
-            "parsed": ollama_ocr_llm_parsed,
         },
     ]
 
