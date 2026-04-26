@@ -11,15 +11,21 @@ The currently-active pipelines (rendered as columns in the UI) are:
 1. **Surya** — bbox-based OCR + `surya_parser.parse_surya_nid_fields`.
 2. **Ollama (vision)** — sends the preprocessed image to a vision LLM (default `gemma4:latest`) and asks for structured JSON directly.
 3. **Surya → Ollama (text)** — feeds Surya's raw OCR text to the same LLM as a text-only extraction step.
+4. **PaddleOCR-VL** — Baidu's 0.9B VLM (`PaddleOCRVL` pipeline). Returns layout blocks with text + bbox; the same `surya_parser.parse_surya_nid_fields` is reused since the parser is engine-agnostic and only needs `[{text, bbox, confidence}, ...]`.
 
+The Ollama columns (Ollama vision, Surya→Ollama text) are **active while PaddleOCR-VL is disabled** — on the 6 GB RTX 4050, paddle's VLM needs ~5.7 GB peak (running through CUDA unified memory) and ollama's gemma4 needs the rest of the GPU; they can't coexist.
 Tesseract, EasyOCR, the EasyOCR→Ollama variant, and the LightOnOCR→Ollama variant have all been **removed from the request flow** but their engine functions (`run_tesseract`, `run_easyocr`, `run_ollama_ocr`) are intentionally kept in `ocr_engines.py` for future use.
 
 ## Running
 
 ```bash
+# PaddleOCR-VL needs the GPU build of paddlepaddle, which ships only via Baidu's index (not PyPI):
+pip install paddlepaddle-gpu==3.2.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
 pip install -r requirements.txt   # also needs system tesseract with Bengali: `apt install tesseract-ocr tesseract-ocr-ben` (only if Tesseract is re-enabled)
 python app.py                     # serves on http://0.0.0.0:8000 with reload
 ```
+
+PaddleOCR-VL is GPU-only (CC ≥ 8 — RTX 30/40/50, A10/A100, etc.); there is no CPU fallback.
 
 Ollama is reached via `OLLAMA_HOST` (default `http://localhost:11434`); models are configured via `OLLAMA_MODEL` (default `gemma4:latest`) and `OLLAMA_OCR_MODEL` (default `maternion/LightOnOCR-2`, currently unused in the request flow).
 

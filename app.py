@@ -8,10 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from preprocessing import preprocess_image
-from ocr_engines import (
-    run_surya, run_ollama, run_ollama_parse_text,
-    OLLAMA_MODEL,
-)
+from ocr_engines import run_surya, run_paddleocr_vl, run_ollama, run_ollama_parse_text, OLLAMA_MODEL
 from bbox_parser import parse_nid_fields_by_bbox
 from surya_parser import parse_surya_nid_fields
 from preprocessing_lab import router as preprocessing_lab_router
@@ -51,16 +48,20 @@ async def process(request: Request, image: UploadFile = File(...)):
         preprocessed_filename = None
 
     # Run OCR engines on preprocessed image
+    # Ollama columns are disabled while PaddleOCR-VL is active: both want
+    # the GPU and the 6 GB card can't host them together. Re-enable by
+    # restoring run_ollama / run_ollama_parse_text imports and the columns.
     ocr_path = preprocessed_path if preprocessed_filename else original_path
     surya_text, surya_time, surya_lines = run_surya(ocr_path)
+    # paddle_text, paddle_time, paddle_lines = run_paddleocr_vl(ocr_path)
     ollama_text, ollama_time, _ = run_ollama(ocr_path)
     surya_llm_text, surya_llm_time, _ = run_ollama_parse_text(surya_text)
-
 
     # Debug: dump raw bbox output per engine next to the preprocessed image
     stem, _ = os.path.splitext(os.path.basename(ocr_path))
     for engine_name, engine_lines in (
         ("surya", surya_lines),
+        # ("paddleocr_vl", paddle_lines),
     ):
         debug_path = os.path.join(UPLOAD_DIR, f"{stem}_{engine_name}_lines.json")
         with open(debug_path, "w", encoding="utf-8") as f:
@@ -123,6 +124,12 @@ async def process(request: Request, image: UploadFile = File(...)):
             "time": f"{surya_time + surya_llm_time:.2f}s",
             "parsed": surya_llm_parsed,
         },
+        # {
+        #     "engine": "PaddleOCR-VL",
+        #     "raw_text": paddle_text,
+        #     "time": f"{paddle_time:.2f}s",
+        #     "parsed": parse_surya_nid_fields(paddle_lines),
+        # },
     ]
 
     return templates.TemplateResponse(request, "index.html", {

@@ -10,3 +10,6 @@ transformers<5
 Pillow>=10.0
 numpy>=1.26
 ollama>=0.3
+# paddlepaddle-gpu wheels for CUDA 12.6 are NOT on PyPI — install separately:
+#   pip install paddlepaddle-gpu==3.2.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
+paddleocr[doc-parser]>=3.0

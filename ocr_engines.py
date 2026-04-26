@@ -16,6 +16,15 @@ _easyocr_reader = None
 _surya_recognition_predictor = None
 _surya_detection_predictor = None
 _ollama_client = None
+_paddleocr_vl_pipeline = None
+
+# Layout-element labels emitted by PaddleOCR-VL that carry text we want to
+# treat as OCR lines. Non-text labels (table, image, chart, formula, figure,
+# seal, …) are dropped.
+_PADDLE_TEXT_LABELS = {
+    "text", "ocr", "paragraph_title", "title", "doc_title",
+    "header", "footer", "abstract", "content", "reference",
+}
 
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "gemma4:latest")
@@ -202,6 +211,77 @@ def run_surya(image_path: str) -> tuple[str, float, list[dict]]:
     except Exception as e:
         print(e)
         return f"[Surya error: {e}]\n{traceback.format_exc()}", 0.0, []
+
+
+def run_paddleocr_vl(image_path: str) -> tuple[str, float, list[dict]]:
+    """Run PaddleOCR-VL on a preprocessed canvas image. Returns
+    (raw_text, elapsed_seconds, text_lines) shaped identically to run_surya:
+    each line is `{text, bbox: [x1,y1,x2,y2], confidence}` in canvas pixels.
+
+    PaddleOCR-VL doesn't expose per-block confidence (see PaddleOCR#16899),
+    so confidence is always None — same convention Surya uses for missing
+    fields. Only text-bearing layout blocks are kept; tables/images/figures
+    are filtered out via `_PADDLE_TEXT_LABELS`.
+
+    Memory tuning: the 0.9B VLM + paddle's CUDA workspace peak at ~5.7 GB,
+    which doesn't fit native on a 6 GB card. `FLAGS_use_cuda_managed_memory`
+    enables CUDA unified memory so paddle can spill to host RAM when VRAM
+    is exhausted — adds modest overhead (≈8–10 s/image on the v1.5 pipeline
+    on a 6 GB RTX 4050) but is the only way to run in-process here. Flags
+    must be set before any paddle import; we set them here instead of
+    module-load time so other engines aren't affected if paddleocr is
+    never invoked."""
+    os.environ.setdefault("FLAGS_use_cuda_managed_memory", "true")
+    os.environ.setdefault("FLAGS_allocator_strategy", "auto_growth")
+    os.environ.setdefault("FLAGS_fraction_of_gpu_memory_to_use", "0.95")
+    os.environ.setdefault("FLAGS_reallocate_gpu_memory_in_mb", "1")
+    try:
+        from paddleocr import PaddleOCRVL
+
+        global _paddleocr_vl_pipeline
+        if _paddleocr_vl_pipeline is None:
+            # pipeline_version="v1.5" (the default) — v1 misreads Bengali as
+            # Devanagari/Telugu; v1.5's multilingual coverage handles Bangla
+            # correctly. Slightly larger but still fits via managed memory.
+            _paddleocr_vl_pipeline = PaddleOCRVL(
+                use_doc_orientation_classify=False,
+                use_doc_unwarping=False,
+                use_chart_recognition=False,
+                use_seal_recognition=False,
+            )
+
+        start = time.time()
+        output = _paddleocr_vl_pipeline.predict(image_path)
+        elapsed = time.time() - start
+
+        lines: list[dict] = []
+        for res in output:
+            payload = getattr(res, "json", None)
+            if isinstance(payload, dict):
+                data = payload.get("res", payload)
+            else:
+                data = {}
+            for block in (data.get("parsing_res_list") or []):
+                label = (block.get("block_label") or "").lower()
+                if label and label not in _PADDLE_TEXT_LABELS:
+                    continue
+                text = (block.get("block_content") or "").strip()
+                bbox = block.get("block_bbox")
+                if bbox is not None and not isinstance(bbox, (list, tuple)):
+                    bbox = list(bbox)  # numpy array → list
+                if not text or not bbox or len(bbox) != 4:
+                    continue
+                lines.append({
+                    "text": text,
+                    "bbox": [float(c) for c in bbox],
+                    "confidence": None,
+                })
+
+        lines.sort(key=lambda l: (l["bbox"][1], l["bbox"][0]))
+        text = "\n".join(l["text"] for l in lines)
+        return _clean_ocr_text(text), elapsed, lines
+    except Exception as e:
+        return f"[PaddleOCR-VL error: {e}]\n{traceback.format_exc()}", 0.0, []
 
 
 def run_ollama(image_path: str) -> tuple[str, float, list[dict]]:
